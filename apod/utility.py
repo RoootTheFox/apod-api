@@ -179,6 +179,7 @@ def _copyright(soup):
         for element in soup.findAll('a', text=True):
             # LOG.debug("TEXT: "+element.text)
 
+            # TODO: this breaks for APODs like 2024-11-09, where it credits "Voyager" instead of "Voyager 2"
             if use_next:
                 copyright_text = element.text.strip(' ')
                 break
@@ -188,23 +189,69 @@ def _copyright(soup):
                 use_next = True
 
         if not copyright_text:
+            LOG.debug("didn't find copyright using first method!")
 
             for element in soup.findAll(['b', 'a'], text=True):
                 # search text for explicit match
-                if 'Copyright' in element.text:
-                    LOG.debug('Found Copyright text:' + str(element.text))
+                if 'Copyright' in element.text or 'Image Credit' in element.text:
+                    LOG.debug('Found Potential Copyright text:' + str(element.text))
                     # pull the copyright from the link text which follows
                     sibling = element.next_sibling
                     stuff = ""
+
+                    # these are used for checking when to add attribution
+                    # if an image contains no direct copyright/license mentions AND credits NASA,
+                    # we can assume the image is public domain - if not, we add the attribution
+                    found_license_mention = False
+                    found_nasa_credit = False
+
                     while sibling:
                         try:
-                            stuff = stuff + sibling.text
-                        except Exception:
+                            # clean up the text a bit and get rid of double spaces
+                            sibling_text = sibling.text.replace('\n', ' ').replace('  ', ' ')
+
+                            # LOG.debug("!!! adding1: |" + sibling_text + "|")
+                            stuff = stuff + sibling_text
+
+                            if sibling_text.lower().strip(' ') == "nasa":
+                                found_nasa_credit = True
+                                LOG.debug(">> found NASA credit!")
+ 
+                            # handle edge cases for licenses and copyright. might not work for all cases yet
+                            if "license" in sibling_text.lower() or "copyright" in sibling_text.lower():
+                                LOG.debug(">> found license mention!")
+                                found_license_mention = True
+                                for link in sibling.findAll('a', text=True):
+                                    LOG.debug("LINK:" + str(link))
+
+                                    if "license" in link.text.lower() or "copyright" in link.text.lower():
+                                        LOG.debug("License link: |" + str(link) + "| from |" + str(sibling_text) + "|")
+                                        LOG.debug("stuff before: |" + stuff + "|")
+
+                                        # adding license link - clean up the URL and text, just in case
+                                        clean_link = link["href"].strip('\n').strip(' ')
+                                        license = clean_link + " " + link.text.strip('\n').strip(' ')
+                                        LOG.debug("license info:" + license)
+                                        # make license prettier if we can by checking for the type of license
+                                        # todo: add more licenses, maybe?
+                                        if "creativecommons.org/licenses/by/2.0" in license:
+                                            license = "CC-BY-2.0"
+
+                                        LOG.debug("!!! adding: |" + license + "|")
+                                        stuff = stuff + " " + license
+
+                        except Exception as ex:
+                            LOG.warning("exception in copyright handler (sibling): " + str(ex))
                             pass
                         sibling = sibling.next_sibling
 
                     if stuff:
-                        copyright_text = stuff.strip(' ')
+                        if not found_license_mention and found_nasa_credit:
+                            LOG.debug("image is likely public domain - explicit NASA credit and no license/copyright mentions found")
+                            copyright_text = None
+                        else:
+                            # LOG.debug("found license or copyright")
+                            copyright_text = stuff.strip(' ').replace('  ', ' ')
         try:
             copyright_text = copyright_text.encode('latin1').decode('cp1252')
         except Exception as ex:
